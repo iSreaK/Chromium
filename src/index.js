@@ -327,6 +327,10 @@ export function deriveGitilesUrls(parsedUrl) {
   };
 }
 
+export function buildSourceUrl({ projectGroup = "chromium", repoName = "src", revision = "main", filePath }) {
+  return `https://source.chromium.org/${projectGroup}/${projectGroup}/${repoName}/+/${revision}:${filePath}`;
+}
+
 async function fetchText(inputUrl) {
   const response = await fetch(inputUrl, { headers: DEFAULT_HEADERS });
   if (!response.ok) {
