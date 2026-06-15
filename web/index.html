@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chromium Source Scraper</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <p class="eyebrow">Analyse locale de code Chromium</p>
+        <h1>Scrape une URL Chromium et visualise le fichier sans cloner le repo.</h1>
+        <p class="hero-copy">
+          Colle une URL <code>source.chromium.org</code>, récupère le code, les fichiers voisins,
+          les symboles clés et, si tu veux, compare deux versions du même fichier.
+        </p>
+      </section>
+
+      <section class="workspace">
+        <div class="panel panel-form">
+          <div class="tabs" role="tablist" aria-label="Mode de scraping">
+            <button class="tab is-active" data-mode="scrape" type="button">Scraper une URL</button>
+            <button class="tab" data-mode="compare" type="button">Comparer deux versions</button>
+          </div>
+
+          <form id="scrape-form" class="form is-active">
+            <label class="field">
+              <span>URL Chromium</span>
+              <input
+                id="scrape-url"
+                name="url"
+                type="url"
+                required
+                value="https://source.chromium.org/chromium/chromium/src/+/refs/tags/148.0.7778.261:sandbox/policy/switches.cc"
+              >
+            </label>
+            <button class="action-button" type="submit">Analyser le fichier</button>
+          </form>
+
+          <form id="compare-form" class="form">
+            <label class="field">
+              <span>URL de base</span>
+              <input
+                id="compare-base-url"
+                name="baseUrl"
+                type="url"
+                required
+                value="https://source.chromium.org/chromium/chromium/src/+/refs/tags/148.0.7778.261:sandbox/policy/switches.cc"
+              >
+            </label>
+            <label class="field">
+              <span>URL de comparaison</span>
+              <input
+                id="compare-url"
+                name="compareUrl"
+                type="url"
+                required
+                value="https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/switches.cc"
+              >
+            </label>
+            <button class="action-button" type="submit">Comparer les versions</button>
+          </form>
+
+          <div id="status-card" class="status-card idle">
+            Prêt. Lance une analyse pour générer la documentation localement.
+          </div>
+        </div>
+
+        <div class="panel panel-results">
+          <div class="results-header">
+            <div>
+              <p class="results-kicker">Résultats</p>
+              <h2 id="results-title">Aucune analyse lancée</h2>
+            </div>
+            <div id="file-links" class="file-links"></div>
+          </div>
+
+          <div id="results-summary" class="summary-grid"></div>
+
+          <div id="results-sections" class="results-sections empty-state">
+            Les détails de l'analyse apparaîtront ici.
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

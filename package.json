@@ -1,0 +1,16 @@
+{
+  "name": "chromium-permissions-policy-scraper",
+  "version": "1.0.0",
+  "description": "Node.js scraper that extracts Chromium Permissions Policy implementation details and generates documentation.",
+  "type": "module",
+  "scripts": {
+    "scrape": "node src/index.js --help",
+    "scrape:fixture": "node src/index.js --source fixtures/chromium-sample --output output/fixture",
+    "scrape:url": "node src/index.js --url \"https://source.chromium.org/chromium/chromium/src/+/refs/tags/148.0.7778.261:sandbox/policy/switches.cc\" --output output/url",
+    "scrape:compare": "node src/index.js --url \"https://source.chromium.org/chromium/chromium/src/+/refs/tags/148.0.7778.261:sandbox/policy/switches.cc\" --compare-url \"https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/switches.cc\" --output output/compare",
+    "web": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
