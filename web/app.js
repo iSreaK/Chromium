@@ -170,6 +170,13 @@ function renderScrapeResult(report, files) {
 
   const sections = [
     createDocumentationCard(report.documentation),
+    createRecommendationsCard(report.recommendations),
+    createListCard("Namespaces", report.symbols.namespaces),
+    createListCard("Gardes plateforme", report.symbols.platformGuards),
+    createListCard(
+      "Constantes et valeurs clés",
+      (report.symbols.constantPairs || []).map((item) => `${item.name} -> ${item.value}`)
+    ),
     createListCard("Fichiers voisins", report.page.neighborFiles),
     createListCard("Includes", report.symbols.includes),
     createListCard("Constantes", report.symbols.constants),
@@ -198,6 +205,7 @@ function renderCompareResult(comparison, files) {
 
   const sections = [
     createDocumentationCard(comparison.documentation),
+    createRecommendationsCard(comparison.recommendations),
     createMetaCard("Versions comparées", [
       `Base : ${comparison.base.page.revisionLabel}`,
       `Comparaison : ${comparison.compare.page.revisionLabel}`
@@ -222,6 +230,7 @@ function renderNearbyResult(nearby, files) {
 
   const sections = [
     createDocumentationCard(nearby.documentation),
+    createRecommendationsCard(nearby.recommendations),
     createTimelineCard("Versions analysées", nearby.comparisons)
   ].filter(Boolean);
 
@@ -372,6 +381,102 @@ function createDocumentationCard(documentation) {
   }
 
   return card;
+}
+
+function createRecommendationsCard(recommendations) {
+  if (!recommendations || recommendations.length === 0) {
+    return null;
+  }
+
+  const card = document.createElement("article");
+  card.className = "result-card recommendations-card";
+  card.innerHTML = "<h3>Suggestions intelligentes</h3>";
+
+  const list = document.createElement("div");
+  list.className = "recommendations-list";
+
+  for (const recommendation of recommendations) {
+    const item = document.createElement("section");
+    item.className = "recommendation-item";
+
+    const title = document.createElement("h4");
+    title.textContent = recommendation.title;
+    item.append(title);
+
+    const reason = document.createElement("p");
+    reason.textContent = recommendation.reason;
+    item.append(reason);
+
+    const actions = document.createElement("div");
+    actions.className = "search-actions";
+
+    const goButton = document.createElement("button");
+    goButton.className = "mini-button";
+    goButton.type = "button";
+    goButton.textContent = recommendation.action.kind === "compare"
+      ? "Lancer la comparaison"
+      : recommendation.action.kind === "nearby"
+        ? "Voir les versions proches"
+        : "Ouvrir cette analyse";
+    goButton.addEventListener("click", async () => {
+      await runRecommendation(recommendation.action);
+    });
+    actions.append(goButton);
+
+    if (recommendation.action.url) {
+      const link = document.createElement("a");
+      link.className = "result-link";
+      link.href = recommendation.action.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = "Voir l'URL";
+      actions.append(link);
+    }
+
+    item.append(actions);
+    list.append(item);
+  }
+
+  card.append(list);
+  return card;
+}
+
+async function runRecommendation(action) {
+  if (action.kind === "scrape") {
+    switchMode("scrape");
+    forms.scrape.querySelector("[name='url']").value = action.url;
+    await runAction({
+      mode: "scrape",
+      endpoint: "/api/scrape",
+      payload: { url: action.url }
+    });
+    return;
+  }
+
+  if (action.kind === "compare") {
+    switchMode("compare");
+    forms.compare.querySelector("[name='baseUrl']").value = action.baseUrl;
+    forms.compare.querySelector("[name='compareUrl']").value = action.compareUrl;
+    await runAction({
+      mode: "compare",
+      endpoint: "/api/compare",
+      payload: {
+        baseUrl: action.baseUrl,
+        compareUrl: action.compareUrl
+      }
+    });
+    return;
+  }
+
+  if (action.kind === "nearby") {
+    switchMode("nearby");
+    forms.nearby.querySelector("[name='url']").value = action.url;
+    await runAction({
+      mode: "nearby",
+      endpoint: "/api/nearby-versions",
+      payload: { url: action.url }
+    });
+  }
 }
 
 function createTimelineCard(title, items) {

@@ -413,6 +413,35 @@ pre {
     linear-gradient(180deg, rgba(255, 247, 235, 0.98), rgba(251, 241, 228, 0.98));
 }
 
+.recommendations-card {
+  background:
+    linear-gradient(180deg, rgba(245, 250, 243, 0.98), rgba(234, 246, 231, 0.98));
+}
+
+.recommendations-list {
+  display: grid;
+  gap: 12px;
+}
+
+.recommendation-item {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(96, 146, 86, 0.16);
+}
+
+.recommendation-item h4 {
+  margin: 0 0 8px;
+  color: #285336;
+  font-size: 1rem;
+}
+
+.recommendation-item p {
+  margin: 0 0 10px;
+  line-height: 1.55;
+  color: #345041;
+}
+
 .timeline-list {
   display: grid;
   gap: 12px;

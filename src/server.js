@@ -414,6 +414,7 @@ async function buildNearbyVersionsReport(inputUrl) {
   };
 
   report.documentation = buildNearbyDocumentation(report);
+  report.recommendations = buildNearbyRecommendations(report);
   report.markdown = renderNearbyMarkdown(report);
   return report;
 }
@@ -526,7 +527,7 @@ function buildNearbyDocumentation(report) {
         ]
       },
       {
-        title: "Intérêt pour le TP",
+        title: "Intérêt de cette vue",
         body: [
           "Cette vue permet de présenter non seulement le contenu d'un fichier Chromium, mais aussi sa stabilité ou son évolution sur plusieurs releases majeures proches.",
           "C'est un bon angle pour montrer qu'on ne se limite pas à un scraping statique, mais qu'on ajoute une dimension d'historique technique."
@@ -534,6 +535,56 @@ function buildNearbyDocumentation(report) {
       }
     ]
   };
+}
+
+function buildNearbyRecommendations(report) {
+  const recommendations = [];
+  const changed = report.comparisons.find((entry) => entry.status === "ok" && entry.diff && (entry.diff.addedCount > 0 || entry.diff.removedCount > 0));
+  const stable = report.comparisons.find((entry) => entry.status === "ok" && entry.diff && entry.diff.addedCount === 0 && entry.diff.removedCount === 0);
+
+  if (changed) {
+    recommendations.push({
+      title: `Comparer en détail avec ${changed.revision}`,
+      reason: "Cette version montre des changements visibles et mérite une comparaison dédiée plus fine.",
+      action: {
+        kind: "compare",
+        baseUrl: report.source.url,
+        compareUrl: changed.url
+      }
+    });
+  }
+
+  if (stable) {
+    recommendations.push({
+      title: `Ouvrir la version stable ${stable.revision}`,
+      reason: "Une version stable voisine peut servir de point de repère pour confirmer que le fichier est mature ou figé.",
+      action: {
+        kind: "scrape",
+        url: stable.url
+      }
+    });
+  }
+
+  recommendations.push({
+    title: "Revenir au fichier de référence",
+    reason: "Après une vue historique, relire le fichier de départ aide à remettre les comparaisons dans le contexte principal.",
+    action: {
+      kind: "scrape",
+      url: report.source.url
+    }
+  });
+
+  recommendations.push({
+    title: "Comparer avec main",
+    reason: "Une comparaison directe avec main reste la façon la plus simple de voir si le fichier continue à évoluer aujourd'hui.",
+    action: {
+      kind: "compare",
+      baseUrl: report.source.url,
+      compareUrl: buildSourceUrl({ revision: "main", filePath: report.source.filePath })
+    }
+  });
+
+  return recommendations.slice(0, 5);
 }
 
 function renderNearbyMarkdown(report) {
@@ -558,6 +609,11 @@ function renderNearbyMarkdown(report) {
       ...section.body,
       ""
     ]),
+    "## Smart Recommendations",
+    ...(report.recommendations.length > 0
+      ? report.recommendations.map((item) => `- ${item.title}: ${item.reason}`)
+      : ["- None available"]),
+    "",
     "## Nearby Revisions",
     ...report.comparisons.map((entry) => `- ${entry.label} | ${entry.revision} | ${entry.summary}`),
     ""

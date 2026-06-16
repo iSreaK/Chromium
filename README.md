@@ -1,41 +1,44 @@
 # Chromium URL Feature Scraper
 
-Ce projet fournit un script Node.js pour scraper du code Chromium à partir d'une URL `source.chromium.org`, puis générer automatiquement une documentation et un résumé des changements entre versions.
+Ce projet Node.js explore du code Chromium à partir d'une URL `source.chromium.org`, puis génère automatiquement :
 
-Il inclut maintenant une **interface web locale** pour éviter de tout saisir en ligne de commande.
+- une documentation lisible
+- un rapport JSON
+- des comparaisons entre versions
+- une vue des versions majeures proches
+- des suggestions intelligentes pour continuer l'exploration
 
-## Idée du TP
+Il inclut aussi une interface web locale pour tout faire sans passer par la ligne de commande.
 
-Au lieu de cloner tout Chromium, on donne une URL comme :
+## Comment ça marche
+
+Tu donnes une URL Chromium, par exemple :
 
 `https://source.chromium.org/chromium/chromium/src/+/refs/tags/148.0.7778.261:sandbox/policy/switches.cc`
 
-Le script :
+L'outil :
 
-- extrait les métadonnées du fichier
-- récupère le contenu brut du fichier depuis `chromium.googlesource.com`
-- récupère la liste des fichiers voisins dans le dossier
-- extrait des symboles utiles du code
-- génère un rapport JSON
-- génère une documentation Markdown
-- peut comparer deux versions d'un même fichier
+1. extrait le dépôt, la révision et le chemin du fichier depuis l'URL
+2. reconstruit les URLs Gitiles correspondantes sur `chromium.googlesource.com`
+3. récupère le code brut du fichier
+4. récupère la liste des fichiers du même dossier
+5. extrait des signaux simples du code :
+   - `#include`
+   - classes
+   - fonctions
+   - constantes
+   - commentaires
+   - gardes de compilation plateforme
+   - namespaces
+6. produit une documentation qui mélange :
+   - structure du fichier
+   - indices sémantiques vus dans le code
+   - contexte local du module
+7. peut aussi comparer deux versions ou plusieurs versions voisines
 
-## Pourquoi cette approche est bien pour un TP
+## Interface web locale
 
-- pas besoin de cloner l'intégralité du dépôt Chromium
-- on peut viser un fichier très précis
-- on peut montrer plusieurs versions d'un même fichier
-- on peut produire une documentation automatique à partir d'URLs réelles
-
-## Commandes
-
-### Afficher l'aide
-
-```bash
-npm run scrape
-```
-
-### Lancer l'interface web locale
+Lancer l'application :
 
 ```bash
 npm run web
@@ -47,80 +50,91 @@ Puis ouvrir :
 http://localhost:3211
 ```
 
-### Démo locale avec fixtures
+Depuis l'interface, tu peux :
+
+- rechercher un sujet comme `sandbox`, `webrtc` ou `autofill`
+- scraper une URL Chromium
+- comparer deux versions d'un même fichier
+- comparer automatiquement une URL taggée avec des versions majeures proches
+- suivre les suggestions intelligentes proposées après une analyse
+
+## Ligne de commande
+
+Afficher l'aide :
+
+```bash
+npm run scrape
+```
+
+Scraper une URL :
+
+```bash
+node src/index.js --url "https://source.chromium.org/.../file.cc" --output output/url
+```
+
+Comparer deux versions :
+
+```bash
+node src/index.js --url "https://source.chromium.org/.../old.cc" --compare-url "https://source.chromium.org/.../new.cc" --output output/compare
+```
+
+Démo locale avec fixtures :
 
 ```bash
 npm run scrape:fixture
 ```
 
-### Scraper une URL Chromium
+## Ce que la documentation générée contient
 
-```bash
-npm run scrape:url
-```
+Pour un fichier seul :
 
-### Comparer deux versions
+- une vue d'ensemble
+- le rôle probable du fichier
+- ce que le scraping met en évidence
+- ce que le code montre réellement
+- les fichiers du même dossier à lire ensuite
+- une conclusion exploitable
 
-```bash
-npm run scrape:compare
-```
+Pour une comparaison :
 
-### Utilisation personnalisée
+- un résumé global du diff
+- une interprétation technique
+- ce que les changements montrent réellement
+- un échantillon de changements
+- une conclusion exploitable
 
-```bash
-node src/index.js --url "https://source.chromium.org/.../file.cc" --output output/url
-node src/index.js --url "https://source.chromium.org/.../old.cc" --compare-url "https://source.chromium.org/.../new.cc" --output output/compare
-```
+Pour les versions proches :
 
-## Interface web
+- un résumé de stabilité
+- les versions comparées
+- une lecture de l'évolution du fichier
 
-L'interface locale permet :
+## Fichiers générés
 
-- de coller une URL Chromium
-- de lancer le scraping sans utiliser le terminal
-- de comparer deux versions d'un même fichier
-- de visualiser les métriques et un aperçu du code
-- d'ouvrir les fichiers Markdown et JSON générés localement
-
-## Sorties générées
-
-### Mode URL
+Mode URL :
 
 - `output/.../chromium-url-report.json`
 - `output/.../chromium-url-documentation.md`
 
-### Mode comparaison
+Mode comparaison :
 
 - `output/.../chromium-url-comparison.json`
 - `output/.../chromium-url-comparison.md`
 
-### Mode local
+Mode versions proches :
+
+- `output/.../chromium-nearby-versions.json`
+- `output/.../chromium-nearby-versions.md`
+
+Mode local :
 
 - `output/.../permissions-policy-report.json`
 - `output/.../permissions-policy-documentation.md`
 
-## Exemple déjà validé
-
-Le script a été testé sur :
-
-- `sandbox/policy/switches.cc`
-- tag `148.0.7778.261`
-- comparaison avec `main`
-
-Le scraper détecte correctement :
-
-- le chemin du fichier
-- le tag ou la révision
-- les fichiers voisins du dossier
-- les `#include`
-- les constantes
-- les commentaires utiles
-
 ## Structure du projet
 
-- `src/index.js` : script principal
-- `src/server.js` : serveur HTTP local
+- `src/index.js` : logique d'analyse, comparaison et génération de documentation
+- `src/server.js` : serveur HTTP local et API
 - `web/` : interface HTML, CSS et JavaScript
 - `fixtures/chromium-sample` : mini exemple local
 - `output/` : rapports générés
-- `TP_PLAN.md` : plan d'action pour le rendu

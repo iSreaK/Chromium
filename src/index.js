@@ -143,7 +143,8 @@ export async function scrapeUrl(inputUrl) {
   const documentation = buildUrlDocumentation(reportBase);
   const report = {
     ...reportBase,
-    documentation
+    documentation,
+    recommendations: buildSmartRecommendations(reportBase)
   };
 
   return {
@@ -166,6 +167,11 @@ export async function compareUrls(baseUrl, compareUrl) {
     compare: compareReport,
     diff,
     documentation: buildComparisonDocumentation({
+      base: baseReport,
+      compare: compareReport,
+      diff
+    }),
+    recommendations: buildComparisonRecommendations({
       base: baseReport,
       compare: compareReport,
       diff
@@ -377,9 +383,33 @@ function extractCodeSymbols(code) {
       /^\s*const\s+(?:char|int|bool|double|float|auto)[^=;]*\s+([A-Za-z_]\w*)\s*(?:\[.*?\])?\s*=/gm,
       1
     ),
+    constantPairs: extractConstantPairs(code),
     enums: extractMatches(code, /^\s*enum(?:\s+class)?\s+([A-Za-z_]\w*)/gm, 1),
-    comments: extractCommentSnippets(code)
+    comments: extractCommentSnippets(code),
+    platformGuards: extractPlatformGuards(code),
+    namespaces: extractMatches(code, /^\s*namespace\s+([A-Za-z_:]\w*(?:::[A-Za-z_]\w*)*)\s*\{/gm, 1)
   };
+}
+
+function extractConstantPairs(code) {
+  const pairs = [];
+  const regex = /^\s*const\s+char\s+([A-Za-z_]\w*)\s*\[\]\s*=\s*"([^"]+)";/gm;
+  for (const match of code.matchAll(regex)) {
+    pairs.push({ name: match[1], value: match[2] });
+  }
+  return pairs;
+}
+
+function extractPlatformGuards(code) {
+  const guards = [];
+  const regex = /^\s*#if\s+(.+)$/gm;
+  for (const match of code.matchAll(regex)) {
+    const condition = match[1].trim();
+    if (condition.includes("BUILDFLAG(") || condition.includes("defined(")) {
+      guards.push(condition);
+    }
+  }
+  return uniqueStrings(guards);
 }
 
 function extractFunctions(text) {
@@ -523,6 +553,203 @@ function uniqueStrings(items) {
   return [...new Set(items.filter(Boolean))];
 }
 
+function buildSmartRecommendations(report) {
+  const recommendations = [];
+  const filePath = report.page.filePathLabel;
+  const revision = report.page.revisionLabel;
+  const neighbors = report.page.neighborFiles || [];
+  const fileName = filePath.split("/").pop() || filePath;
+  const stem = fileName.replace(/\.[^.]+$/, "");
+  const extension = fileName.includes(".") ? fileName.slice(fileName.lastIndexOf(".")) : "";
+  const directory = filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/") + 1) : "";
+  const repoArgs = { revision };
+
+  const counterpart = findCounterpart(fileName, neighbors);
+  if (counterpart) {
+    recommendations.push({
+      title: `Ouvrir le fichier lié ${counterpart}`,
+      reason: "Le header/source associé est souvent le meilleur prolongement immédiat pour comprendre l'API ou l'implémentation.",
+      action: {
+        kind: "scrape",
+        url: buildSourceUrl({ ...repoArgs, filePath: `${directory}${counterpart}` })
+      }
+    });
+  }
+
+  const testFile = findTestCompanion(stem, neighbors);
+  if (testFile) {
+    recommendations.push({
+      title: `Lire le test ${testFile}`,
+      reason: "Le test associé montre souvent les cas importants, les garanties attendues et les scénarios de régression.",
+      action: {
+        kind: "scrape",
+        url: buildSourceUrl({ ...repoArgs, filePath: `${directory}${testFile}` })
+      }
+    });
+  }
+
+  const readmeFile = neighbors.find((entry) => entry === "README.md");
+  if (readmeFile) {
+    recommendations.push({
+      title: "Consulter le README du module",
+      reason: "Un README local donne souvent le contexte architectural du dossier et les objectifs du sous-système.",
+      action: {
+        kind: "scrape",
+        url: buildSourceUrl({ ...repoArgs, filePath: `${directory}${readmeFile}` })
+      }
+    });
+  }
+
+  const buildFile = neighbors.find((entry) => entry === "BUILD.gn");
+  if (buildFile) {
+    recommendations.push({
+      title: "Examiner BUILD.gn",
+      reason: "Le fichier de build aide à repérer les dépendances, les cibles de test et le périmètre exact du module.",
+      action: {
+        kind: "scrape",
+        url: buildSourceUrl({ ...repoArgs, filePath: `${directory}${buildFile}` })
+      }
+    });
+  }
+
+  const nextInteresting = findInterestingNeighbor(fileName, neighbors);
+  if (nextInteresting) {
+    recommendations.push({
+      title: `Explorer aussi ${nextInteresting}`,
+      reason: "Ce voisin semble proche fonctionnellement et peut compléter la lecture du fichier courant.",
+      action: {
+        kind: "scrape",
+        url: buildSourceUrl({ ...repoArgs, filePath: `${directory}${nextInteresting}` })
+      }
+    });
+  }
+
+  if (revision !== "main") {
+    recommendations.push({
+      title: "Comparer avec main",
+      reason: "Comparer la release observée avec la branche principale est un bon moyen de détecter si le fichier est encore actif ou déjà stabilisé.",
+      action: {
+        kind: "compare",
+        baseUrl: buildSourceUrl({ revision, filePath }),
+        compareUrl: buildSourceUrl({ revision: "main", filePath })
+      }
+    });
+  }
+
+  if (/^refs\/tags\//.test(revision)) {
+    recommendations.push({
+      title: "Explorer les versions proches",
+      reason: "La vue multi-versions permet d'estimer si ce fichier évolue souvent ou reste stable entre releases majeures.",
+      action: {
+        kind: "nearby",
+        url: buildSourceUrl({ revision, filePath })
+      }
+    });
+  }
+
+  return dedupeRecommendations(recommendations).slice(0, 6);
+}
+
+function buildComparisonRecommendations({ base, compare, diff }) {
+  const recommendations = [];
+
+  if (diff.addedCount === 0 && diff.removedCount === 0) {
+    recommendations.push({
+      title: "Explorer les versions proches",
+      reason: "Le fichier semble stable sur cette comparaison; une vue sur plusieurs versions majeures dira si cette stabilité se confirme dans le temps.",
+      action: {
+        kind: "nearby",
+        url: base.url
+      }
+    });
+  } else {
+    recommendations.push({
+      title: "Relire le fichier source de base",
+      reason: "Après un diff non trivial, revenir au fichier de base aide à replacer les changements dans leur contexte complet.",
+      action: {
+        kind: "scrape",
+        url: base.url
+      }
+    });
+  }
+
+  recommendations.push(...buildSmartRecommendations(base).filter((entry) => entry.action.kind !== "compare"));
+
+  recommendations.push({
+    title: `Analyser directement ${compare.page.revisionLabel}`,
+    reason: "Ouvrir la version comparée seule aide à lire sa documentation locale sans être limité au diff.",
+    action: {
+      kind: "scrape",
+      url: compare.url
+    }
+  });
+
+  return dedupeRecommendations(recommendations).slice(0, 6);
+}
+
+function findCounterpart(fileName, neighbors) {
+  if (fileName.endsWith(".cc")) {
+    const candidate = fileName.replace(/\.cc$/, ".h");
+    if (neighbors.includes(candidate)) {
+      return candidate;
+    }
+  }
+  if (fileName.endsWith(".h")) {
+    const candidate = fileName.replace(/\.h$/, ".cc");
+    if (neighbors.includes(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function findTestCompanion(stem, neighbors) {
+  const candidates = [
+    `${stem}_unittest.cc`,
+    `${stem}_browsertest.cc`,
+    `${stem}_test.cc`
+  ];
+  return candidates.find((candidate) => neighbors.includes(candidate)) || null;
+}
+
+function findInterestingNeighbor(fileName, neighbors) {
+  const filtered = neighbors.filter((entry) => entry !== fileName && !entry.endsWith("/"));
+  const priorities = [
+    /feature/i,
+    /manager/i,
+    /parser/i,
+    /delegate/i,
+    /context/i,
+    /\.cc$/i,
+    /\.h$/i
+  ];
+
+  for (const pattern of priorities) {
+    const match = filtered.find((entry) => pattern.test(entry));
+    if (match) {
+      return match;
+    }
+  }
+
+  return filtered[0] || null;
+}
+
+function dedupeRecommendations(recommendations) {
+  const seen = new Set();
+  const output = [];
+
+  for (const item of recommendations) {
+    const key = JSON.stringify(item.action) + item.title;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(item);
+  }
+
+  return output;
+}
+
 function buildUrlDocumentation(report) {
   const fileName = report.page.filePathLabel.split("/").pop() || report.page.filePathLabel;
   const folderName = report.page.filePathLabel.includes("/")
@@ -532,6 +759,7 @@ function buildUrlDocumentation(report) {
   const includeSummary = summarizeIncludes(report.symbols.includes);
   const constantSummary = summarizeConstants(report.symbols.constants);
   const commentSummary = summarizeComments(report.symbols.comments);
+  const semanticInsights = analyzeCodeSemantics(report);
 
   return {
     title: `${fileName} - documentation automatique`,
@@ -560,6 +788,11 @@ function buildUrlDocumentation(report) {
         ]
       },
       {
+        title: "Ce que le code montre réellement",
+        body: semanticInsights.paragraphs,
+        bullets: semanticInsights.bullets
+      },
+      {
         title: "Fichiers voisins à lire ensuite",
         body: [
           buildNeighborReadingAdvice(report.page.neighborFiles)
@@ -567,13 +800,122 @@ function buildUrlDocumentation(report) {
         bullets: report.page.neighborFiles.slice(0, 8)
       },
       {
-        title: "Conclusion exploitable pour le TP",
+        title: "Conclusion exploitable",
         body: [
-          buildAcademicConclusion(report)
+          buildAnalysisConclusion(report)
         ]
       }
     ]
   };
+}
+
+function analyzeCodeSemantics(report) {
+  const paragraphs = [];
+  const bullets = [];
+  const pairs = report.symbols.constantPairs || [];
+  const guards = report.symbols.platformGuards || [];
+  const namespace = report.symbols.namespaces?.[0];
+
+  if (namespace) {
+    paragraphs.push(`Le fichier déclare sa logique dans l'espace de noms \`${namespace}\`, ce qui confirme son rattachement explicite à ce sous-système.`);
+  }
+
+  const categorized = categorizeConstantPairs(pairs);
+  if (categorized.total > 0) {
+    paragraphs.push(
+      `L'analyse des valeurs réellement assignées montre un fichier qui expose surtout des chaînes de configuration utilisables par d'autres couches, plutôt qu'une logique métier complexe exécutée sur place.`
+    );
+
+    if (categorized.disable.length > 0) {
+      bullets.push(`Contrôles de désactivation repérés : ${categorized.disable.slice(0, 4).map(formatConstantPair).join(", ")}`);
+    }
+    if (categorized.enable.length > 0) {
+      bullets.push(`Contrôles d'activation repérés : ${categorized.enable.slice(0, 4).map(formatConstantPair).join(", ")}`);
+    }
+    if (categorized.debug.length > 0) {
+      bullets.push(`Options de debug ou diagnostic : ${categorized.debug.slice(0, 3).map(formatConstantPair).join(", ")}`);
+    }
+    if (categorized.process.length > 0) {
+      bullets.push(`Types de processus ou rôles exposés : ${categorized.process.slice(0, 5).map(formatConstantPair).join(", ")}`);
+    }
+  }
+
+  if (guards.length > 0) {
+    paragraphs.push(
+      `Le code contient des gardes de compilation plateforme, ce qui indique que toutes les options ne s'appliquent pas partout et que le comportement dépend explicitement de l'OS ciblé.`
+    );
+    bullets.push(`Gardes détectées : ${guards.slice(0, 4).map((value) => `\`${value}\``).join(", ")}`);
+  }
+
+  const behaviorSummary = summarizeBehaviorFromComments(report.symbols.comments || []);
+  if (behaviorSummary) {
+    paragraphs.push(behaviorSummary);
+  }
+
+  if (paragraphs.length === 0) {
+    paragraphs.push("Le code ne contient pas assez de signaux simples pour déduire un comportement fort, mais sa structure reste exploitable pour orienter une lecture manuelle plus approfondie.");
+  }
+
+  return { paragraphs, bullets };
+}
+
+function categorizeConstantPairs(pairs) {
+  const result = {
+    total: pairs.length,
+    disable: [],
+    enable: [],
+    debug: [],
+    process: []
+  };
+
+  for (const pair of pairs) {
+    const text = `${pair.name} ${pair.value}`.toLowerCase();
+    if (/(disable|no-)/.test(text)) {
+      result.disable.push(pair);
+    }
+    if (/(enable|allow|add-)/.test(text)) {
+      result.enable.push(pair);
+    }
+    if (/(debug|log|fatal)/.test(text)) {
+      result.debug.push(pair);
+    }
+    if (/(process|renderer|gpu|utility|zygote|service)/.test(text)) {
+      result.process.push(pair);
+    }
+  }
+
+  return result;
+}
+
+function formatConstantPair(pair) {
+  return `\`${pair.name}\` -> \`${pair.value}\``;
+}
+
+function summarizeBehaviorFromComments(comments) {
+  const normalized = comments.map((comment) => comment.toLowerCase());
+  const found = [];
+
+  if (normalized.some((value) => value.includes("disable"))) {
+    found.push("désactivation de comportements");
+  }
+  if (normalized.some((value) => value.includes("allow"))) {
+    found.push("exceptions ou autorisations spécifiques");
+  }
+  if (normalized.some((value) => value.includes("debug"))) {
+    found.push("scénarios de debug");
+  }
+  if (normalized.some((value) => value.includes("testing"))) {
+    found.push("cas d'usage de test");
+  }
+  if (normalized.some((value) => value.includes("linux") || value.includes("win") || value.includes("mac") || value.includes("android"))) {
+    found.push("variantes selon la plateforme");
+  }
+
+  if (found.length === 0) {
+    return "";
+  }
+
+  return `Les commentaires suggèrent que le fichier sert à exprimer surtout ${found.join(", ")}, ce qui donne une lecture plus concrète de son rôle que la seule arborescence.`;
 }
 
 function inferDominantKind(report) {
@@ -674,9 +1016,9 @@ function buildNeighborReadingAdvice(neighborFiles) {
   return `Pour prolonger l'analyse, il est logique d'ouvrir ensuite ${preferred.map((value) => `\`${value}\``).join(", ")}, car ces fichiers partagent le même dossier et donc le même contexte fonctionnel.`;
 }
 
-function buildAcademicConclusion(report) {
+function buildAnalysisConclusion(report) {
   const fileName = report.page.filePathLabel.split("/").pop() || report.page.filePathLabel;
-  return `Pour le TP, ce fichier peut être présenté comme une entrée représentative du module étudié. Le scraping montre à la fois son rôle local (${fileName}), ses dépendances immédiates, les symboles qu'il expose et le contexte de dossier dans lequel il s'insère. Cela donne une base crédible pour rédiger une documentation technique sans devoir analyser manuellement tout Chromium.`;
+  return `Ce fichier peut être présenté comme une entrée représentative du module étudié. Le scraping montre à la fois son rôle local (${fileName}), ses dépendances immédiates, les symboles qu'il expose et le contexte de dossier dans lequel il s'insère. Cela donne une base crédible pour rédiger une documentation technique sans devoir analyser manuellement tout Chromium.`;
 }
 
 function buildComparisonDocumentation(comparison) {
@@ -690,6 +1032,7 @@ function buildComparisonDocumentation(comparison) {
     (value) => !comparison.compare.symbols.constants.includes(value)
   );
   const sameFile = comparison.diff.addedCount === 0 && comparison.diff.removedCount === 0;
+  const semanticInsights = buildComparisonSemanticInsights(comparison);
 
   return {
     title: `${filePath} - documentation comparative`,
@@ -712,7 +1055,12 @@ function buildComparisonDocumentation(comparison) {
         ]
       },
       {
-        title: "Changements à commenter dans le TP",
+        title: "Ce que les changements montrent réellement",
+        body: semanticInsights.paragraphs,
+        bullets: semanticInsights.bullets
+      },
+      {
+        title: "Changements à commenter",
         body: [
           sameFile
             ? "Même sans modification visible, cette comparaison reste utile pour montrer qu'un fichier central peut rester stable entre une release taggée et la branche principale."
@@ -723,7 +1071,7 @@ function buildComparisonDocumentation(comparison) {
           .map((change) => `${change.type === "add" ? "+" : "-"} ligne ${change.type === "add" ? change.compareLine : change.baseLine}: ${change.line}`)
       },
       {
-        title: "Conclusion exploitable pour le TP",
+        title: "Conclusion exploitable",
         body: [
           buildComparisonConclusion(comparison, addedSymbols, removedSymbols)
         ]
@@ -748,6 +1096,56 @@ function buildComparisonInterpretation(comparison) {
   return "La comparaison suggère une réorganisation équilibrée du contenu, avec un volume proche d'ajouts et de suppressions.";
 }
 
+function buildComparisonSemanticInsights(comparison) {
+  const paragraphs = [];
+  const bullets = [];
+  const basePairs = comparison.base.symbols.constantPairs || [];
+  const comparePairs = comparison.compare.symbols.constantPairs || [];
+  const addedPairs = comparePairs.filter(
+    (pair) => !basePairs.some((candidate) => candidate.name === pair.name && candidate.value === pair.value)
+  );
+  const removedPairs = basePairs.filter(
+    (pair) => !comparePairs.some((candidate) => candidate.name === pair.name && candidate.value === pair.value)
+  );
+  const baseGuards = comparison.base.symbols.platformGuards || [];
+  const compareGuards = comparison.compare.symbols.platformGuards || [];
+  const addedGuards = compareGuards.filter((guard) => !baseGuards.includes(guard));
+  const removedGuards = baseGuards.filter((guard) => !compareGuards.includes(guard));
+  const baseComments = comparison.base.symbols.comments || [];
+  const compareComments = comparison.compare.symbols.comments || [];
+  const addedComments = compareComments.filter((comment) => !baseComments.includes(comment));
+
+  if (addedPairs.length === 0 && removedPairs.length === 0 && addedGuards.length === 0 && removedGuards.length === 0 && addedComments.length === 0) {
+    paragraphs.push("Au-delà du diff texte, les signaux sémantiques extraits restent eux aussi stables : mêmes constantes repérées, mêmes gardes de compilation et pas de nouveau commentaire métier visible.");
+  } else {
+    paragraphs.push("Le diff ne montre pas seulement des lignes modifiées : on peut aussi lire ce qui change dans les options exposées, la couverture plateforme et les indices laissés par les commentaires.");
+  }
+
+  if (addedPairs.length > 0) {
+    paragraphs.push("De nouvelles constantes ou valeurs publiques apparaissent, ce qui suggère que le fichier expose de nouvelles options, variantes ou points de configuration.");
+    bullets.push(`Constantes ajoutées : ${addedPairs.slice(0, 6).map(formatConstantPair).join(", ")}`);
+  }
+  if (removedPairs.length > 0) {
+    paragraphs.push("Certaines constantes disparaissent, ce qui peut indiquer un nettoyage d'API, une simplification ou l'abandon d'anciens comportements.");
+    bullets.push(`Constantes retirées : ${removedPairs.slice(0, 6).map(formatConstantPair).join(", ")}`);
+  }
+  if (addedGuards.length > 0 || removedGuards.length > 0) {
+    paragraphs.push("Les gardes de compilation ont évolué, ce qui signale un changement de portée entre plateformes ou de stratégie d'activation conditionnelle.");
+    if (addedGuards.length > 0) {
+      bullets.push(`Gardes ajoutées : ${addedGuards.slice(0, 4).map((value) => `\`${value}\``).join(", ")}`);
+    }
+    if (removedGuards.length > 0) {
+      bullets.push(`Gardes retirées : ${removedGuards.slice(0, 4).map((value) => `\`${value}\``).join(", ")}`);
+    }
+  }
+  if (addedComments.length > 0) {
+    paragraphs.push("De nouveaux commentaires utiles sont apparus, ce qui peut refléter l'ajout de contexte, de contraintes ou de cas particuliers à connaître.");
+    bullets.push(`Commentaires ajoutés : ${addedComments.slice(0, 3).map((value) => `"${value}"`).join(", ")}`);
+  }
+
+  return { paragraphs, bullets };
+}
+
 function buildSymbolEvolutionNarrative(addedSymbols, removedSymbols) {
   if (addedSymbols.length === 0 && removedSymbols.length === 0) {
     return "Le jeu de constantes extrait reste inchangé entre les deux versions, ce qui renforce l'idée d'une interface stable pour ce fichier.";
@@ -770,10 +1168,10 @@ function buildRevisionReadingAdvice(comparison) {
 function buildComparisonConclusion(comparison, addedSymbols, removedSymbols) {
   const fileName = comparison.base.page.filePathLabel.split("/").pop() || comparison.base.page.filePathLabel;
   if (comparison.diff.addedCount === 0 && comparison.diff.removedCount === 0) {
-    return `Pour le TP, cette comparaison montre que \`${fileName}\` est resté stable entre \`${comparison.base.page.revisionLabel}\` et \`${comparison.compare.page.revisionLabel}\`. C'est un bon argument pour dire que le fichier joue un rôle structurel ou mature dans le module.`;
+    return `Cette comparaison montre que \`${fileName}\` est resté stable entre \`${comparison.base.page.revisionLabel}\` et \`${comparison.compare.page.revisionLabel}\`. C'est un bon argument pour dire que le fichier joue un rôle structurel ou mature dans le module.`;
   }
 
-  return `Pour le TP, cette comparaison montre que \`${fileName}\` évolue entre \`${comparison.base.page.revisionLabel}\` et \`${comparison.compare.page.revisionLabel}\`. Les écarts observés, ainsi que ${addedSymbols.length + removedSymbols.length > 0 ? "l'évolution des symboles extraits" : "les lignes modifiées"}, peuvent servir d'appui concret pour commenter la maintenance du module dans le temps.`;
+  return `Cette comparaison montre que \`${fileName}\` évolue entre \`${comparison.base.page.revisionLabel}\` et \`${comparison.compare.page.revisionLabel}\`. Les écarts observés, ainsi que ${addedSymbols.length + removedSymbols.length > 0 ? "l'évolution des symboles extraits" : "les lignes modifiées"}, peuvent servir d'appui concret pour commenter la maintenance du module dans le temps.`;
 }
 
 function normalizeSlashes(value) {
@@ -809,6 +1207,11 @@ export function renderUrlMarkdown(report) {
       ...(section.bullets ? section.bullets.map((item) => `- ${item}`) : []),
       ""
     ]),
+    "## Smart Recommendations",
+    ...(report.recommendations.length > 0
+      ? report.recommendations.flatMap((item) => [`- ${item.title}: ${item.reason}`])
+      : ["- None available"]),
+    "",
     "## Neighbor Files",
     ...(report.page.neighborFiles.length > 0
       ? report.page.neighborFiles.map((file) => `- ${file}`)
@@ -856,6 +1259,11 @@ export function renderComparisonMarkdown(comparison) {
       ...(section.bullets ? section.bullets.map((item) => `- ${item}`) : []),
       ""
     ]),
+    "## Smart Recommendations",
+    ...(comparison.recommendations.length > 0
+      ? comparison.recommendations.map((item) => `- ${item.title}: ${item.reason}`)
+      : ["- None available"]),
+    "",
     "## Sample Changes",
     ...(comparison.diff.sampleChanges.length > 0
       ? comparison.diff.sampleChanges.map((change) => {
